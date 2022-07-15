@@ -5,8 +5,8 @@
 #
 ##########################################################################
 
-from numpy import *
 from pandas import *
+from numpy import *
 from scipy.spatial import Delaunay
 from scipy.spatial import KDTree
 from scipy.interpolate import griddata
@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial import ConvexHull
 from scipy.sparse import *
 from scipy.sparse.linalg import *
+import json
 
 
 ### classes ###
@@ -64,12 +65,12 @@ class LHS_Matrix:
         col_index = []
         data = []
         # diagonal terms
-        for i in xrange(len(cells_df)):         # diagonal term setup isn't vectorized because of sparse matrix structure
+        for i in range(len(cells_df)):         # diagonal term setup isn't vectorized because of sparse matrix structure
             row_index.append(i)
             col_index.append(i)
             data.append(cells_df['vol'][i]*cells_df['Ss'][i]/dt + params.gamma*cells_df['sum_conduct'][i])
         # off-diagonal terms
-        for i in xrange(len(connections.nodes)):
+        for i in range(len(connections.nodes)):
             node_1 = connections.nodes[i, 0]
             node_2 = connections.nodes[i, 1]
             row_index.append(node_1)
@@ -175,9 +176,9 @@ def Gridder(params):
     # read in point data and use data frame(s) to interpolate/fill in grid points
     cells_df = read_csv('wells.txt', sep='\t')
 
-    for i in xrange(params.num_refine):
+    for i in range(params.num_refine):
 
-        print 'Grid refinement step no.',i+1
+        print('Grid refinement step no.',i+1)
 
         # create new internal points (those not part of a segmented boundary)
         pts_internal_df = cells_df[(cells_df['fixed'] < 2)]
@@ -252,16 +253,24 @@ def DecToN(num, n):
 
 def SortNodes(cells_df, params):
     # heirarchically split the grid into quadrants to group nearby cells together - this will reduce sparse matrix bandwidth
-    for i in xrange(params.num_quad_level):
+    for i in range(params.num_quad_level):
         if not i: cells_df['quad'] = Quadrants(cells_df)      # initialize quadrant assignments (top level)
         else:
-            for j in xrange(4**i):
+            for j in range(4**i):
                 # step through quadrants defined at previous level (i-1)
                 quad_index = DecToN(j, 4) * 10.**(-(i-1))
                 # the next statement selectively only operates on those df rows with 'quad' = current definition of quad_index
-                cells_df.ix[cells_df['quad']==quad_index, 'quad'] += 10.**(-i) * Quadrants(cells_df.ix[cells_df['quad']==quad_index])
+                # print(cells_df.iloc[where(cells_df.quad == quad_index)])
+                # print("-----------")
+
+                # print(Quadrants(cells_df.iloc[where(cells_df.quad == quad_index)]))
+                # print("-----------")
+                cells_df.iloc[where(cells_df['quad']==quad_index)]['quad'] += 10.**(-i) * Quadrants(cells_df.iloc[where(cells_df['quad']==quad_index)])
     # sort by 'quad' and re-index; new indices (row numbers) = node numbers that will be used to define connections and populate sparse matrix
-    cells_df = cells_df.sort('quad')
+    cells_df = cells_df.sort_values(by='quad')
+    # print(cells_df)
+    # print("-----------")
+
     cells_df.reset_index(drop = True, inplace = True)    
     return cells_df
 
@@ -293,7 +302,7 @@ def ProcessGeometry(vor, cells_df, node_locs, params):
 def SumConductances(cells_df, connections):
     # return the sum of the conductance terms associated with each cell
     sum_conduct = zeros(len(cells_df), float)
-    for i in xrange(len(connections.nodes)):
+    for i in range(len(connections.nodes)):
         node_1 = connections.nodes[i, 0]
         node_2 = connections.nodes[i, 1]
         sum_conduct[node_1] += connections.conduct[i]
@@ -304,7 +313,7 @@ def SumConductances(cells_df, connections):
 def RHS_Vector(cells_df, connections):
     # construct explicit matrix (run for each time step)
     b = cells_df['Q'] - cells_df['sum_conduct'] * cells_df['h']
-    for i in xrange(len(connections.nodes)):
+    for i in range(len(connections.nodes)):
         node_1 = connections.nodes[i, 0]
         node_2 = connections.nodes[i, 1]
         b[node_1] += connections.conduct[i] * cells_df['h'][node_2]
@@ -320,7 +329,7 @@ def BuildGrid(params):
     # optimize cell/node order
     cells_df = SortNodes(cells_df, params)
     node_locs = array([cells_df['x'], cells_df['y']]).T
-    print 'Processed node numbering scheme.'
+    print('Processed node numbering scheme.')
 
     # calculate Voronoi polygons
     vor = Voronoi(node_locs)
@@ -328,16 +337,16 @@ def BuildGrid(params):
         voronoi_plot_2d(vor)
         plt.show()
     cells_df['vor_region'] = vor.point_region           # note index number of Voronoi region associated with each node
-    print 'Created Voronoi diagram; computed interfacial areas and connections.'
+    print('Created Voronoi diagram; computed interfacial areas and connections.')
 
     # populate Connections object, which holds arrays for node-to-node connections,including interfacial areas and distances
     connections = Connections(vor, cells_df)
     cells_df['sum_conduct'] = SumConductances(cells_df, connections)
-    print 'Mapped cell connections.'
+    print('Mapped cell connections.')
 
     # process cell geometry
     cells_df = ProcessGeometry(vor, cells_df, node_locs, params)
-    print 'Processed internal cell geometry.'
+    print('Processed internal cell geometry.')
     cells_df.to_csv('init_cells.csv')               # write grid setup and initial conditions to output file
 
     return cells_df, connections
@@ -346,7 +355,7 @@ def BuildGrid(params):
 def FlowModel(params, cells_df, connections):
 
     # initialize ...
-    print 'Running flow model ...'
+    print('Running flow model ...')
     t = 0.
     dt = params.dt_init
     track_cells = array(where(cells_df['track']==1))[0]             # note the cell numbers for nodes that serve as monitor wells
@@ -355,21 +364,33 @@ def FlowModel(params, cells_df, connections):
 
     # set up left-hand-side of equation set with LHS_Matrix class; diagonal terms will change as the time step changes
     implicit = LHS_Matrix(cells_df, connections, params, dt)
+    print("--------------LHS MATRIX ------------------------")
+    print(implicit.col_index)
+    print(implicit.col_index.shape)
+    print(implicit.row_index)
+    print(implicit.data)
 
     while t < params.t_end:
 
         converged = False
 
         while converged == False:
+            print(f"------Timestep {t} --------------")
 
             # modify diagonal according to time step size
             implicit.Diagonal(cells_df, params, dt)
+            print("#### DIAGONAL #####")
+            print(implicit.data.shape)
             
             # update sparse equation matrix
             A = csr_matrix( (array(implicit.data),(array(implicit.row_index), array(implicit.col_index))), shape=(len(cells_df), len(cells_df)) )
+            print("----------A----------------")
+            print(A.shape)
 
             # construct explicit vector
             b = RHS_Vector(cells_df, connections)
+            print(" +++++++++++ RHS MATRIX +++++++++++++++")
+            print(b.shape)
 
             # solve equations
             dh = spsolve(A,b)
@@ -425,11 +446,11 @@ def USG():
     # run groundwater flow model
     FlowModel(params, cells_df, connections)
 
-    print 'Completed.'
+    print('Completed.')
 
 
 ### run script ###
-USG()
+# USG()
 
 
 
